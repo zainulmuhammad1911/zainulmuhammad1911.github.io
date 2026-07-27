@@ -1212,7 +1212,7 @@
 <div class="modal-overlay" id="modal-pembelian">
   <div class="modal" style="max-width:560px;">
     <div class="modal-header">
-      <div class="modal-title">🛒 Input Pembelian Seafood</div>
+      <div class="modal-title" id="modal-pembelian-title">🛒 Input Pembelian Seafood</div>
       <button class="modal-close" onclick="closeModal('modal-pembelian')">✕</button>
     </div>
     <div class="modal-body">
@@ -1255,7 +1255,7 @@
     </div>
     <div class="modal-footer">
       <button class="btn-secondary" onclick="closeModal('modal-pembelian')">Batal</button>
-      <button class="btn-primary" onclick="savePembelian()">💾 Simpan</button>
+      <button class="btn-primary" id="btn-simpan-pembelian" onclick="savePembelian()">💾 Simpan</button>
     </div>
   </div>
 </div>
@@ -1310,6 +1310,7 @@
 let db = null;
 let editingOrderId = null;
 let editingPembelianId = null;
+let lastPembelianItems = [];
 let editingPengeluaranId = null;
 let chartDaily = null, chartProduk = null, chartCashflow = null;
 let chartProdukBar = null, chartProdukPie = null;
@@ -1482,7 +1483,11 @@ function getDateRange(period) {
 
 function setDefaultDates() {
   const t = today();
-  ['filter-tgl-dari','filter-tgl-sampai','filter-beli-dari','filter-beli-sampai'].forEach(id => {
+  // Catatan: filter-beli-dari/filter-beli-sampai (filter Riwayat Pembelian)
+  // SENGAJA TIDAK di-default ke hari ini — kalau di-default, saat pertama
+  // dibuka filter jadi "hanya hari ini" dan riwayat pembelian lama jadi
+  // tampak kosong padahal datanya ada. Biarkan kosong = tampilkan semua.
+  ['filter-tgl-dari','filter-tgl-sampai'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = t;
   });
@@ -2305,6 +2310,12 @@ async function autofillCustomer(nama) {
 
 function hitungTotal() {} // legacy, tidak dipakai lagi
 
+function hitungTotalModal() {
+  const qty = parseFloat(document.getElementById('b-qty').value) || 0;
+  const harga = parseFloat(document.getElementById('b-harga-modal').value) || 0;
+  document.getElementById('b-total-modal').value = qty * harga;
+}
+
 function generateInvoiceNo() {
   const now = new Date();
   const ymd = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
@@ -2628,6 +2639,7 @@ async function loadPembelian() {
 
   const { data } = await q;
   const items = data || [];
+  lastPembelianItems = items;
 
   const totalModal = items.reduce((s, p) => s + Number(p.total_modal || 0), 0);
   const totalQty = items.reduce((s, p) => s + Number(p.qty || 0), 0);
@@ -2649,6 +2661,7 @@ async function loadPembelian() {
       <td><strong>${fmtRp(p.total_modal)}</strong></td>
       <td style="color:var(--gray-400);font-size:12px;">${p.catatan || '-'}</td>
       <td>
+        <button class="btn-secondary" onclick="editPembelian('${p.id}')">✏️</button>
         <button class="btn-danger" onclick="deletePembelian('${p.id}')">🗑️</button>
       </td>
     </tr>
@@ -2662,6 +2675,9 @@ function resetFilterBeli() {
 }
 
 function openPembelianModal() {
+  editingPembelianId = null;
+  document.getElementById('modal-pembelian-title').textContent = '🛒 Input Pembelian Seafood';
+  document.getElementById('btn-simpan-pembelian').textContent = '💾 Simpan';
   document.getElementById('b-tanggal').value = today();
   document.getElementById('b-qty').value = '';
   document.getElementById('b-harga-modal').value = '';
@@ -2670,6 +2686,24 @@ function openPembelianModal() {
   document.getElementById('b-catatan').value = '';
   document.getElementById('b-supplier').value = 'Pasar Muara Baru';
   document.getElementById('b-produk').value = '';
+  openModal('modal-pembelian');
+}
+
+function editPembelian(id) {
+  const p = lastPembelianItems.find(item => String(item.id) === String(id));
+  if (!p) { showToast('Data tidak ditemukan, coba muat ulang', 'error'); return; }
+
+  editingPembelianId = p.id;
+  document.getElementById('modal-pembelian-title').textContent = '✏️ Edit Pembelian Seafood';
+  document.getElementById('btn-simpan-pembelian').textContent = '💾 Update';
+  document.getElementById('b-tanggal').value = p.tanggal || today();
+  document.getElementById('b-supplier').value = p.supplier || '';
+  document.getElementById('b-produk').value = p.produk || '';
+  document.getElementById('b-ukuran').value = p.ukuran || '';
+  document.getElementById('b-qty').value = p.qty || '';
+  document.getElementById('b-harga-modal').value = p.harga_modal || '';
+  document.getElementById('b-catatan').value = p.catatan || '';
+  hitungTotalModal();
   openModal('modal-pembelian');
 }
 
@@ -2688,9 +2722,17 @@ async function savePembelian() {
     showToast('Lengkapi Tanggal, Produk, dan Harga Modal', 'error'); return;
   }
 
-  const { error } = await db.from('pembelian').insert(payload);
-  if (error) { showToast('Gagal simpan: ' + error.message, 'error'); return; }
-  showToast('Pembelian berhasil disimpan!', 'success');
+  if (editingPembelianId) {
+    const { error } = await db.from('pembelian').update(payload).eq('id', editingPembelianId);
+    if (error) { showToast('Gagal update: ' + error.message, 'error'); return; }
+    showToast('Pembelian berhasil diupdate!', 'success');
+  } else {
+    const { error } = await db.from('pembelian').insert(payload);
+    if (error) { showToast('Gagal simpan: ' + error.message, 'error'); return; }
+    showToast('Pembelian berhasil disimpan!', 'success');
+  }
+
+  editingPembelianId = null;
   closeModal('modal-pembelian');
   loadPembelian();
 }
